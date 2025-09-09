@@ -74,11 +74,18 @@ export const useLineagePopover = ({
   }, []);
 
   /**
-   * Finds the DOM element for a given node ID
+   * Finds the DOM element for a given node ID with enhanced selectors for zoom/pan scenarios
    */
   const findNodeElement = useCallback((nodeId: string): Element | null => {
+    // Enhanced selectors to handle various DOM states during zoom/pan/drag
     const selectors = [
+      `[data-id="${nodeId}"] rect.pill-background`,
+      `[data-id="${nodeId}"] rect[class*="pill"]`,
+      `[data-id="${nodeId}"] rect[class*="background"]`,
+      `[data-id="${nodeId}"] rect[class*="Background"]`,
+      // Fallback to any rect in the node
       `[data-id="${nodeId}"] rect`,
+      // Try the node container itself
       `[data-id="${nodeId}"]`,
       `g[data-id="${nodeId}"]`,
       `g[data-id="${nodeId}"] rect`,
@@ -86,7 +93,13 @@ export const useLineagePopover = ({
 
     for (const selector of selectors) {
       const element = document.querySelector(selector);
-      if (element) return element;
+      if (element) {
+        // Verify element is actually visible and has dimensions
+        const rect = element.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          return element;
+        }
+      }
     }
 
     return null;
@@ -115,37 +128,36 @@ export const useLineagePopover = ({
    * Checks if two positions are significantly different
    */
   const hasPositionChanged = useCallback(
-    (pos1: { x: number; y: number }, pos2: { x: number; y: number }): boolean => {
-      const threshold = 15;
+    (pos1: { x: number; y: number }, pos2: { x: number; y: number }, threshold = 5): boolean => {
       return Math.abs(pos1.x - pos2.x) > threshold || Math.abs(pos1.y - pos2.y) > threshold;
     },
     [],
   );
 
   /**
-   * Updates the popover position by hiding and showing it with new trigger element
+   * Updates the popover position using optimized hide/show cycle
+   * This is the most reliable approach with PatternFly's Popover component
    */
   const updatePopoverPosition = useCallback(
     (nodeId: string, newPosition: { x: number; y: number }) => {
       const element = findNodeElement(nodeId);
       if (!element) return;
 
-      // Quick hide/show cycle to update position
+      // Optimized hide/show cycle - fastest approach for PatternFly
       setIsPopoverVisible(false);
 
-      setTimeout(() => {
-        // Update position
+      // Single requestAnimationFrame for minimal delay
+      requestAnimationFrame(() => {
+        // Update with fresh element reference
         setClickPosition({
           x: newPosition.x,
           y: newPosition.y,
           pillElement: element,
         });
 
-        // Show again
-        setTimeout(() => {
-          setIsPopoverVisible(true);
-        }, 50);
-      }, 50);
+        // Show immediately in the same frame
+        setIsPopoverVisible(true);
+      });
     },
     [findNodeElement, setClickPosition],
   );
@@ -167,14 +179,14 @@ export const useLineagePopover = ({
       if (!currentPosition) return;
 
       // Only update if position changed significantly and we have a previous position
-      if (lastKnownPosition.x !== 0 && hasPositionChanged(currentPosition, lastKnownPosition)) {
+      if (lastKnownPosition.x !== 0 && hasPositionChanged(currentPosition, lastKnownPosition, 3)) {
         isRepositioning = true;
         updatePopoverPosition(nodeToReposition.id, currentPosition);
 
-        // Reset repositioning flag after update completes
+        // Reset repositioning flag immediately for real-time updates
         setTimeout(() => {
           isRepositioning = false;
-        }, 150);
+        }, 16); // ~60fps
       }
 
       lastKnownPosition = currentPosition;
@@ -188,7 +200,7 @@ export const useLineagePopover = ({
 
     const throttledCheck = () => {
       clearTimeout(updateTimer);
-      updateTimer = setTimeout(checkAndRepositionPopover, 100);
+      updateTimer = setTimeout(checkAndRepositionPopover, 16); // ~60fps for smooth real-time updates
     };
 
     const immediateCheck = () => {
@@ -196,7 +208,7 @@ export const useLineagePopover = ({
       checkAndRepositionPopover();
     };
 
-    // Listen for movement events (throttled)
+    // Listen for movement events (more responsive throttling)
     svgContainer.addEventListener('mousemove', throttledCheck, { passive: true });
     svgContainer.addEventListener('wheel', throttledCheck, { passive: true });
 
@@ -207,6 +219,19 @@ export const useLineagePopover = ({
 
     // Also check on any interaction end
     document.addEventListener('click', immediateCheck);
+
+    // Add MutationObserver to watch for DOM changes during zoom/pan/drag
+    const observer = new MutationObserver(() => {
+      // DOM changed, check if we need to update position immediately
+      immediateCheck();
+    });
+
+    observer.observe(svgContainer, {
+      attributes: true,
+      attributeFilter: ['transform', 'style', 'class'],
+      subtree: true, // Watch all descendants
+      childList: true, // Watch for added/removed nodes
+    });
 
     // Initial position setup
     setTimeout(checkAndRepositionPopover, 100);
@@ -219,6 +244,7 @@ export const useLineagePopover = ({
       svgContainer.removeEventListener('mouseleave', immediateCheck);
       document.removeEventListener('mouseup', immediateCheck);
       document.removeEventListener('click', immediateCheck);
+      observer.disconnect();
     };
   }, [selectedNode, getNodeScreenPosition, hasPositionChanged, updatePopoverPosition]);
 

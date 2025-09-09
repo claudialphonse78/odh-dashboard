@@ -1,5 +1,5 @@
 /* eslint-disable camelcase */
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   Popover,
   Button,
@@ -63,16 +63,25 @@ const FeatureStoreLineageNodePopover: React.FC<FeatureStoreLineageNodePopoverPro
   const { currentProject } = useFeatureStoreProject();
   const navigate = useNavigate();
 
-  // Drag tracking is now handled in useLineagePopover hook
+  // ALL HOOKS MUST BE CALLED UNCONDITIONALLY AT THE TOP
+  const { getLastClickPosition } = useLineageClick();
+  const clickPosition = getLastClickPosition();
+  const triggerElement = clickPosition?.pillElement;
+
+  // Use a ref to track the trigger element and update when it changes
+  const triggerRef = useRef<Element | null>(null);
+
+  // Update trigger ref when element changes (for real-time positioning)
+  useEffect(() => {
+    if (triggerElement && triggerElement !== triggerRef.current) {
+      triggerRef.current = triggerElement;
+    }
+  }, [triggerElement]);
 
   // Conditional rendering after all hooks
   if (!node || !isVisible || !currentProject) {
     return null;
   }
-
-  const { getLastClickPosition } = useLineageClick();
-  const clickPosition = getLastClickPosition();
-  const triggerElement = clickPosition?.pillElement;
 
   if (!triggerElement) {
     return null;
@@ -86,7 +95,7 @@ const FeatureStoreLineageNodePopover: React.FC<FeatureStoreLineageNodePopoverPro
       maxWidth="480px"
       position="top"
       enableFlip
-      triggerRef={{ current: triggerElement }}
+      triggerRef={triggerRef}
       bodyContent={
         <Stack hasGutter style={{ minWidth: '280px' }}>
           {node.description && (
